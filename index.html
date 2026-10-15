@@ -8,7 +8,10 @@
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; background-color: #f4f4f9; }
         .hidden { display: none !important; }
-        .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        
+        /* コンテナの最大幅を広げ、1280px画面で余裕を持たせる */
+        .container { max-width: 1360px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); box-sizing: border-box; }
+        
         h1, h2, h3, h4 { text-align: center; color: #333; margin-top: 0; }
         
         #lobby-screen { text-align: center; padding: 40px 0; }
@@ -16,15 +19,22 @@
         .btn-large:hover { background: #0056b3; }
         input[type="text"], input[type="number"], input[type="password"], select { padding: 5px; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         
+        /* 左右パネルのレイアウト調整 */
         #main-screen { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
-        .panel { flex: 1; min-width: 320px; background: #fafafa; border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
+        .panel { background: #fafafa; border: 1px solid #ddd; padding: 15px; border-radius: 5px; box-sizing: border-box; }
+        
+        /* 左側（盤面パネル）は盤面サイズに合わせて幅を確保 */
+        .board-container { flex: 0 0 auto; min-width: 320px; display: flex; flex-direction: column; align-items: center; position: sticky; top: 10px; }
+        
+        /* 右側（設定・タイマー・棋譜パネル）は残りの空間を埋める */
+        .right-panel { flex: 1; min-width: 400px; display: flex; flex-direction: column; }
         
         /* --- 盤面UI --- */
-        .board-container { display: flex; flex-direction: column; align-items: center; position: sticky; top: 10px; }
         .hand { width: 100%; min-height: 50px; border: 1px dashed #aaa; margin: 5px 0; padding: 5px; display: flex; flex-wrap: wrap; gap: 5px; background: #fff; box-sizing: border-box; }
         #board { border: 2px solid #333; background: #eab26f; display: inline-block; }
         .board-row { display: flex; }
         
+        /* 盤面のセルサイズ（デフォルトはPC用） */
         #board .cell { width: 50px; height: 50px; border: 1px solid #555; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: bold; cursor: pointer; user-select: none; box-sizing: border-box; }
         .cell.selected { background: #fffa90; }
         .piece { cursor: pointer; display: inline-block; transition: transform 0.2s; }
@@ -47,7 +57,7 @@
         .tab-content { font-size: 13px; min-height: 120px; }
 
         /* --- モーダル --- */
-        .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #fff; border: 2px solid #333; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 100; text-align: center; border-radius: 8px; }
+        .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #fff; border: 2px solid #333; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 100; text-align: center; border-radius: 8px; max-width: 90%; box-sizing: border-box; }
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 99; }
         
         /* --- 棋譜用紙 --- */
@@ -73,12 +83,31 @@
         /* --- Guest画面用 --- */
         #guest-screen { height: 100vh; display: flex; flex-direction: column; background: #ececec; box-sizing: border-box; padding: 20px; }
         #guest-status-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px; margin-bottom: 10px; }
-        .guest-timer-container { display: flex; flex: 1; gap: 20px; width: 100%; }
-        .guest-panel { flex: 1; background: #fff; border: 1px solid #ddd; border-radius: 8px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .guest-timer-container { display: flex; flex: 1; gap: 20px; width: 100%; flex-wrap: wrap; }
+        .guest-panel { flex: 1; min-width: 300px; background: #fff; border: 1px solid #ddd; border-radius: 8px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         .guest-name { font-size: 4vw; text-align: center; padding: 15px; background: #f8f8f8; border-bottom: 1px solid #eee; font-weight: bold; border-radius: 8px 8px 0 0; color: #333; transition: background 0.3s; }
         .guest-name.active { background: #f8c471; }
         .guest-time-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
-        .guest-timer { font-size: 15vw; font-variant-numeric: tabular-nums; text-align: center; color: #111; line-height: 1; }
+        .guest-timer { font-size: 12vw; font-variant-numeric: tabular-nums; text-align: center; color: #111; line-height: 1; }
+
+        /* --- レスポンシブ対応（スマホ・タブレット向け） --- */
+        @media (max-width: 992px) {
+            .board-container { position: static; min-width: 100%; flex: none; }
+            .right-panel { min-width: 100%; flex: none; }
+        }
+
+        @media (max-width: 768px) {
+            #board .cell { width: 40px; height: 40px; font-size: 22px; }
+            .hand .piece { font-size: 22px; }
+            .guest-name { font-size: 6vw; }
+            .guest-timer { font-size: 15vw; }
+        }
+
+        @media (max-width: 480px) {
+            #board .cell { width: 32px; height: 32px; font-size: 18px; }
+            .hand .piece { font-size: 18px; }
+            .timer-box { font-size: 1.5rem; }
+        }
     </style>
 </head>
 <body>
@@ -168,7 +197,7 @@
         </div>
         
         <!-- ▼ 右側：設定・タイマー・棋譜・コメント ▼ -->
-        <div class="panel" style="flex: 1.5; display: flex; flex-direction: column;">
+        <div class="panel right-panel">
             
             <!-- 折りたたみ可能な設定エリア -->
             <details id="settings-accordion" class="host-only" open>
