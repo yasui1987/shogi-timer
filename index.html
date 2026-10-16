@@ -666,4 +666,585 @@
 
         state.handSente.forEach((p, i) => {
             let el = document.createElement('span');
-            el.className = 'piece sente' + (selectedCell?.isHand && selectedCell.owner
+            el.className = 'piece sente' + (selectedCell?.isHand && selectedCell.owner===0 && selectedCell.idx===i ? ' selected' : '');
+            el.textContent = p; el.style.transform = `rotate(${boardRotation}deg)`;
+            if(el.className.includes('selected')) el.style.border = '2px solid red';
+            el.onclick = () => handleHandClick(0, i); senteEl.appendChild(el);
+        });
+        state.handGote.forEach((p, i) => {
+            let el = document.createElement('span');
+            el.className = 'piece gote' + (selectedCell?.isHand && selectedCell.owner===1 && selectedCell.idx===i ? ' selected' : '');
+            el.textContent = p; el.style.transform = `rotate(${180+boardRotation}deg)`;
+            if(el.className.includes('selected')) el.style.border = '2px solid red';
+            el.onclick = () => handleHandClick(1, i); goteEl.appendChild(el);
+        });
+    }
+
+    /* --- 将棋操作ロジック --- */
+    function saveHistory() {
+        if (!state.history) state.history = [];
+        state.history.push({
+            board: JSON.parse(JSON.stringify(state.board)),
+            handSente: [...state.handSente],
+            handGote: [...state.handGote],
+            turn: state.turn,
+            moves: JSON.parse(JSON.stringify(state.moves)),
+            moveExactSec: state.moveExactSec
+        });
+    }
+
+    function undoMove() {
+        if (currentRole !== 'HOST' || !state.history || state.history.length === 0) return;
+        
+        const snap = state.history.pop();
+        
+        state.undoneMoveSec = snap.moveExactSec; 
+        
+        state.board = snap.board;
+        state.handSente = snap.handSente;
+        state.handGote = snap.handGote;
+        state.turn = snap.turn; 
+        state.moves = snap.moves;
+        
+        selectedCell = null; pendingMove = null;
+        
+        selectedMoveIndex = state.moves.length - 1;
+        selectMoveForComment(selectedMoveIndex);
+        
+        renderNames(); changeBoardRotation(); renderTimer(); renderKifuPaper(); syncState(); saveLocal();
+    }
+
+    function handleHandClick(owner, idx) {
+        if (currentRole !== 'HOST' || state.turn !== owner) return;
+        selectedCell = { isHand: true, owner, idx, p: owner === 0 ? state.handSente[idx] : state.handGote[idx] };
+        renderBoard();
+    }
+
+    function handleCellClick(x, y) {
+        if (currentRole !== 'HOST') return;
+        let pData = state.board[y][x];
+        if (!selectedCell) {
+            if (pData && pData.o === state.turn) { selectedCell = { isHand: false, x, y, pData }; renderBoard(); }
+        } else {
+            if (selectedCell.isHand) {
+                if (pData) return;
+                executeMove(x, y, false);
+            } else {
+                if (selectedCell.x === x && selectedCell.y === y) { selectedCell = null; renderBoard(); return; }
+                if (pData && pData.o === state.turn) { selectedCell = { isHand: false, x, y, pData }; renderBoard(); return; }
+                let isEnemyZone = (state.turn === 0 && (y <= 2 || selectedCell.y <= 2)) || (state.turn === 1 && (y >= 6 || selectedCell.y >= 6));
+                let canPromote = isEnemyZone && !["玉","金","と","杏","圭","全","馬","龍"].includes(selectedCell.pData.p);
+                if (canPromote) {
+                    pendingMove = { x, y, pData };
+                    document.getElementById('modal-overlay').classList.remove('hidden');
+                    document.getElementById('promo-modal').classList.remove('hidden');
+                } else {
+                    executeMove(x, y, false);
+                }
+            }
+        }
+    }
+
+    function resolvePromo(promote) {
+        document.getElementById('modal-overlay').classList.add('hidden');
+        document.getElementById('promo-modal').classList.add('hidden');
+        executeMove(pendingMove.x, pendingMove.y, promote);
+        pendingMove = null;
+    }
+
+    function executeMove(x, y, promote) {
+        saveHistory(); 
+
+        let moveStr = ""; let dispX = 9 - x; let dispY = numToKanji[y + 1];
+
+        if (selectedCell.isHand) {
+            state.board[y][x] = { p: selectedCell.p, o: state.turn };
+            if (state.turn === 0) state.handSente.splice(selectedCell.idx, 1);
+            else state.handGote.splice(selectedCell.idx, 1);
+            moveStr = `${dispX}${dispY}${selectedCell.p}打`;
+        } else {
+            let target = pendingMove ? pendingMove.pData : state.board[y][x];
+            if (target) {
+                let capStr = target.p;
+                const demoteMap = {"と":"歩", "杏":"香", "圭":"桂", "全":"銀", "馬":"角", "龍":"飛"};
+                if (demoteMap[capStr]) capStr = demoteMap[capStr];
+                if (state.turn === 0) state.handSente.push(capStr); else state.handGote.push(capStr);
+            }
+            let p = selectedCell.pData.p;
+            if (promote) {
+                const promoteMap = {"歩":"と", "香":"杏", "桂":"圭", "銀":"全", "角":"馬", "飛":"龍"};
+                if(promoteMap[p]) p = promoteMap[p];
+                moveStr = `${dispX}${dispY}${selectedCell.pData.p}成`;
+            } else { moveStr = `${dispX}${dispY}${p}`; }
+            state.board[selectedCell.y][selectedCell.x] = null;
+            state.board[y][x] = { p: p, o: state.turn };
+        }
+        
+        let spent;
+        if (state.timerTurn !== state.turn && state.undoneMoveSec !== undefined) {
+            spent = state.undoneMoveSec;
+            state.undoneMoveSec = undefined;
+        } else {
+            spent = state.moveExactSec;
+        }
+
+        let mSpent = Math.floor(spent / 60);
+        let sSpent = spent % 60;
+        
+        let totalSec = 0;
+        if (state.mode === 'stopwatch') {
+            totalSec = state.turn === 0 ? state.timeSente : state.timeGote;
+        } else {
+            let remain = state.turn === 0 ? state.timeSente : state.timeGote;
+            totalSec = state.settings.mainTime - remain;
+            if(totalSec < 0) totalSec = 0;
+        }
+        let hTot = Math.floor(totalSec / 3600);
+        let mTot = Math.floor((totalSec % 3600) / 60);
+        let sTot = totalSec % 60;
+        let kifTime = `( ${mSpent}:${sSpent.toString().padStart(2,'0')}/${hTot.toString().padStart(2,'0')}:${mTot.toString().padStart(2,'0')}:${sTot.toString().padStart(2,'0')})`;
+        
+        state.moves.push({ moveStr: moveStr, kifTime: kifTime, comment: "" });
+        
+        selectedCell = null;
+        
+        let prevTurn = state.turn;
+        state.turn = prevTurn === 0 ? 1 : 0;
+        
+        if (state.timerTurn === prevTurn) {
+            switchTimerTurn(state.turn);
+        }
+        
+        selectedMoveIndex = state.moves.length - 1;
+        selectMoveForComment(selectedMoveIndex);
+        
+        renderBoard(); renderKifuPaper(); 
+        const wrap = document.querySelector('.kifu-paper-wrap');
+        if(wrap) wrap.scrollTop = wrap.scrollHeight;
+        
+        saveLocal();
+        if (document.getElementById('webhook-auto-send').checked) triggerWebhookSend();
+    }
+
+    function selectMoveForComment(index) {
+        selectedMoveIndex = index;
+        const ta = document.getElementById('comment-input');
+        const label = document.getElementById('comment-target-label');
+        if(index >= 0 && index < state.moves.length) {
+            let turnSymbol = (index % 2 === 0) ? '▲' : '△';
+            label.textContent = `✎ ${index+1}手目 ${turnSymbol}${state.moves[index].moveStr} へのコメント`;
+            ta.value = state.moves[index].comment || "";
+            ta.disabled = false;
+        } else {
+            label.textContent = "コメント対象の手がありません";
+            ta.value = "";
+            ta.disabled = true;
+        }
+        renderKifuPaper();
+    }
+
+    function saveComment() {
+        if (selectedMoveIndex >= 0 && selectedMoveIndex < state.moves.length) {
+            const text = document.getElementById('comment-input').value;
+            if (currentRole === 'HOST') {
+                state.moves[selectedMoveIndex].comment = text;
+                renderKifuPaper(); syncState(); saveLocal();
+                if (document.getElementById('webhook-auto-send').checked) triggerWebhookSend();
+                setStatus("✓ コメントを保存しました");
+            } else if (currentRole === 'COMMENTATOR') {
+                connection.send({ type: 'comment', index: selectedMoveIndex, text: text });
+                setStatus("コメントを送信しました");
+            }
+        }
+    }
+
+    function renderKifuPaper() {
+        const tbody = document.getElementById('kifu-paper-body');
+        if(!tbody) return;
+        tbody.innerHTML = ''; let tr = null;
+        for (let i = 0; i < state.moves.length; i++) {
+            let m = state.moves[i];
+            let dispText = m.moveStr + (m.comment ? " *" : "");
+            
+            if (i % 2 === 0) {
+                tr = document.createElement('tr');
+                let tdNum1 = document.createElement('td'); tdNum1.textContent = i + 1;
+                let tdSente = document.createElement('td'); 
+                tdSente.textContent = dispText;
+                tdSente.className = (i === selectedMoveIndex) ? "selected-move" : "kifu-move";
+                tdSente.onclick = () => selectMoveForComment(i);
+                
+                let tdNum2 = document.createElement('td'); 
+                let tdGote = document.createElement('td');
+                
+                tr.appendChild(tdNum1); tr.appendChild(tdSente); 
+                tr.appendChild(tdNum2); tr.appendChild(tdGote);
+                tbody.appendChild(tr);
+            } else { 
+                tr.children[2].textContent = i + 1;
+                tr.children[3].textContent = dispText;
+                tr.children[3].className = (i === selectedMoveIndex) ? "selected-move" : "kifu-move";
+                tr.children[3].onclick = () => selectMoveForComment(i);
+            }
+        }
+    }
+
+    function copyKif() { navigator.clipboard.writeText(buildKifString()).then(() => setStatus("✓ KIFをコピーしました")); }
+    
+    function downloadKif() {
+        const blob = new Blob([buildKifString()], {type: "text/plain;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `${state.playerSente}_vs_${state.playerGote}.kif`;
+        a.click(); URL.revokeObjectURL(url);
+    }
+
+    function openTimeEdit() {
+        if (currentRole !== 'HOST') return;
+        
+        let sRem = state.mode === 'stopwatch' && state.settings.mainTime > 0 ? Math.max(0, state.settings.mainTime - state.timeSente) : state.timeSente;
+        document.getElementById('edit-sente-h').value = Math.floor(sRem / 3600);
+        document.getElementById('edit-sente-m').value = Math.floor((sRem % 3600) / 60);
+        document.getElementById('edit-sente-s').value = sRem % 60;
+        
+        let gRem = state.mode === 'stopwatch' && state.settings.mainTime > 0 ? Math.max(0, state.settings.mainTime - state.timeGote) : state.timeGote;
+        document.getElementById('edit-gote-h').value = Math.floor(gRem / 3600);
+        document.getElementById('edit-gote-m').value = Math.floor((gRem % 3600) / 60);
+        document.getElementById('edit-gote-s').value = gRem % 60;
+        
+        document.getElementById('edit-exact-s').value = state.moveExactSec;
+
+        document.getElementById('modal-overlay').classList.remove('hidden');
+        document.getElementById('time-edit-modal').classList.remove('hidden');
+    }
+
+    function closeTimeEdit() {
+        document.getElementById('modal-overlay').classList.add('hidden');
+        document.getElementById('time-edit-modal').classList.add('hidden');
+    }
+
+    function saveTimeEdit() {
+        if (currentRole !== 'HOST') return;
+        
+        let sh = parseInt(document.getElementById('edit-sente-h').value) || 0;
+        let sm = parseInt(document.getElementById('edit-sente-m').value) || 0;
+        let ss = parseInt(document.getElementById('edit-sente-s').value) || 0;
+        let sTotal = sh * 3600 + sm * 60 + ss;
+        
+        let gh = parseInt(document.getElementById('edit-gote-h').value) || 0;
+        let gm = parseInt(document.getElementById('edit-gote-m').value) || 0;
+        let gs = parseInt(document.getElementById('edit-gote-s').value) || 0;
+        let gTotal = gh * 3600 + gm * 60 + gs;
+        
+        if (state.mode === 'stopwatch' && state.settings.mainTime > 0) {
+            state.timeSente = Math.max(0, state.settings.mainTime - sTotal);
+            state.timeGote = Math.max(0, state.settings.mainTime - gTotal);
+        } else {
+            state.timeSente = sTotal;
+            state.timeGote = gTotal;
+        }
+        
+        state.moveExactSec = parseInt(document.getElementById('edit-exact-s').value) || 0;
+        
+        closeTimeEdit();
+        renderTimer(); syncState(); saveLocal();
+        setStatus("✓ 時間を調整しました");
+    }
+
+    function applySettings() {
+        if (currentRole !== 'HOST') return;
+        
+        if(!confirm("設定を適用し、盤面と棋譜をリセットして新しい対局を始めますか？")) return;
+
+        if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+        
+        state.playerSente = document.getElementById('input-sente-name').value || "先手";
+        state.playerGote = document.getElementById('input-gote-name').value || "後手";
+
+        const h = parseInt(document.getElementById('setting-hours').value) || 0;
+        const m = parseInt(document.getElementById('setting-minutes').value) || 0;
+        const byoyomi = parseInt(document.getElementById('setting-byoyomi').value) || 0;
+        const koryoSec = parseInt(document.getElementById('setting-koryo-sec').value) || 0;
+        const koryoCount = parseInt(document.getElementById('setting-koryo-count').value) || 0;
+        const addSec = parseInt(document.getElementById('setting-add-sec').value) || 0;
+
+        state.mode = document.getElementById('timer-mode').value;
+        state.settings.mainTime = h * 3600 + m * 60;
+        state.settings.byoyomi = byoyomi;
+        state.settings.koryoSec = koryoSec;
+        state.settings.koryoCount = koryoCount;
+        state.settings.addSec = addSec;
+
+        state.timeSente = state.mode === 'stopwatch' ? 0 : state.settings.mainTime;
+        state.timeGote = state.timeSente;
+        state.byoyomiSente = state.settings.byoyomi;
+        state.byoyomiGote = state.settings.byoyomi;
+        state.countSente = state.settings.koryoCount;
+        state.countGote = state.settings.koryoCount;
+        
+        state.moveExactSec = 0; state.turn = 0; state.timerTurn = 0; state.isRunning = false; state.history = [];
+        state.board = JSON.parse(JSON.stringify(initialBoard));
+        state.handSente = [];
+        state.handGote = [];
+        state.moves = [];
+        state.rawKif = [];
+        state.kifuMoves = [];
+        selectedCell = null; pendingMove = null;
+        state.undoneMoveSec = undefined;
+        
+        const acc = document.getElementById('settings-accordion');
+        if (acc) acc.removeAttribute('open');
+        
+        renderNames(); 
+        renderTimer(); 
+        renderBoard();
+        selectMoveForComment(-1); 
+        syncState(); 
+        saveLocal();
+    }
+
+    function startTimer() { if (currentRole === 'HOST' && !state.isRunning) { state.isRunning = true; timerInterval = setInterval(tickTimer, 1000); syncState(); } }
+    
+    function stopTimer() { 
+        if (currentRole === 'HOST') { 
+            state.isRunning = false; 
+            if (timerInterval) {
+                clearInterval(timerInterval); 
+                timerInterval = null;
+            }
+            syncState(); 
+        } 
+    }
+    
+    function forceTurn(newTurn) {
+        if (currentRole !== 'HOST') return;
+        state.turn = newTurn;
+        switchTimerTurn(newTurn);
+    }
+
+    function switchTimerTurn(newTurn) {
+        let turnSente = state.timerTurn === 0;
+        let t = turnSente ? 'timeSente' : 'timeGote';
+        let b = turnSente ? 'byoyomiSente' : 'byoyomiGote';
+
+        if (state.mode === 'stopwatch') {
+            if (state.settings.mainTime > 0 && state[t] >= state.settings.mainTime) {
+                if (turnSente) state.byoyomiSente = state.settings.byoyomi;
+                else state.byoyomiGote = state.settings.byoyomi;
+            }
+        } 
+        else if (state.mode === 'countdown') {
+            if (turnSente) state.byoyomiSente = state.settings.byoyomi;
+            else state.byoyomiGote = state.settings.byoyomi;
+        }
+        else if (state.mode === 'byoyomi') {
+            if (turnSente) state.byoyomiSente = state.settings.byoyomi;
+            else state.byoyomiGote = state.settings.byoyomi;
+        }
+        else if (state.mode === 'fischer' && state.isRunning) {
+            if (turnSente) state.timeSente += state.settings.addSec; 
+            else state.timeGote += state.settings.addSec;
+        }
+
+        state.timerTurn = newTurn;
+        state.moveExactSec = 0; 
+        renderTimer(); syncState(); saveLocal();
+    }
+
+    function tickTimer() {
+        if (!state.isRunning || currentRole !== 'HOST') return;
+        let turnSente = state.timerTurn === 0;
+        let t = turnSente ? 'timeSente' : 'timeGote';
+        let b = turnSente ? 'byoyomiSente' : 'byoyomiGote';
+        let c = turnSente ? 'countSente' : 'countGote';
+
+        state.moveExactSec++;
+
+        if (state.mode === 'stopwatch') {
+            if (state.moveExactSec > 0 && state.moveExactSec % 60 === 0) {
+                state[t] += 60; 
+            }
+            if (state.settings.mainTime > 0 && state[t] >= state.settings.mainTime) {
+                if (state[b] > 0) state[b]--;
+            }
+        } else if (state.mode === 'countdown') {
+            if (state[t] > 0) state[t]--;
+            else state[b]--; 
+        } else if (state.mode === 'byoyomi') {
+            if (state[t] > 0) state[t]--;
+            else if (state[b] > 0) state[b]--; 
+            else if (state[c] > 0) {
+                state[c]--;
+                state[b] = state.settings.koryoSec;
+                state[b]--; 
+            } else {
+                state[b]--;
+            }
+        } else if (state.mode === 'fischer') {
+            state[t]--;
+        }
+        
+        renderTimer(); syncState();
+    }
+
+    function formatTime(sec, byoyomi, count, mode, exactSec) {
+        if (mode === 'stopwatch') {
+            if (state.settings.mainTime > 0 && sec >= state.settings.mainTime) {
+                let dByo = byoyomi < 0 ? 0 : byoyomi;
+                return `00:${dByo.toString().padStart(2, '0')}`;
+            } else {
+                let remain = state.settings.mainTime > 0 ? state.settings.mainTime - sec : sec;
+                if (remain < 0) remain = 0;
+                let h = Math.floor(remain / 3600);
+                let m = Math.floor((remain % 3600) / 60);
+                let sStr = (exactSec % 60).toString().padStart(2, '0');
+                if (state.settings.mainTime > 0) {
+                    return h > 0 ? `${h}:${m.toString().padStart(2,'0')}:00 (${sStr}秒)` : `${m.toString().padStart(2,'0')}:00 (${sStr}秒)`;
+                } else {
+                    return h > 0 ? `消費 ${h}:${m.toString().padStart(2,'0')}:00 (${sStr}秒)` : `消費 ${m.toString().padStart(2,'0')}:00 (${sStr}秒)`;
+                }
+            }
+        } else {
+            let isMainTimeEnded = (mode !== 'fischer' && sec <= 0);
+            if (isMainTimeEnded) {
+                let dByo = byoyomi < 0 ? 0 : byoyomi;
+                if (mode === 'byoyomi') return `00:${dByo.toString().padStart(2, '0')} (${count}回)`;
+                else return `00:${dByo.toString().padStart(2, '0')}`;
+            } else {
+                let dSec = sec < 0 ? 0 : sec;
+                let h = Math.floor(dSec / 3600); let m = Math.floor((dSec % 3600) / 60); let s = dSec % 60;
+                let timeStr = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                return h > 0 ? `${h}:` + timeStr : timeStr;
+            }
+        }
+    }
+
+    function renderTimer() {
+        const sTime = formatTime(state.timeSente, state.byoyomiSente, state.countSente, state.mode, state.timerTurn === 0 && state.isRunning ? state.moveExactSec : 0);
+        const gTime = formatTime(state.timeGote, state.byoyomiGote, state.countGote, state.mode, state.timerTurn === 1 && state.isRunning ? state.moveExactSec : 0);
+
+        if (currentRole !== 'GUEST') {
+            document.getElementById('timer-sente').textContent = sTime;
+            document.getElementById('timer-gote').textContent = gTime;
+            document.getElementById('timer-sente').className = "timer-box" + (state.isRunning && state.timerTurn === 0 ? " active" : "");
+            document.getElementById('timer-gote').className = "timer-box" + (state.isRunning && state.timerTurn === 1 ? " active" : "");
+        } else {
+            document.getElementById('guest-timer-sente').textContent = sTime;
+            document.getElementById('guest-timer-gote').textContent = gTime;
+            document.getElementById('guest-name-sente').className = "guest-name" + (state.isRunning && state.timerTurn === 0 ? " active" : "");
+            document.getElementById('guest-name-gote').className = "guest-name" + (state.isRunning && state.timerTurn === 1 ? " active" : "");
+        }
+    }
+
+    /* --- PeerJS 通信初期化 --- */
+    function updateConnectionStatus() {
+        if (currentRole === 'HOST') {
+            document.getElementById('host-status').textContent = `現在の子機接続数: ${connections.length}台`;
+            document.getElementById('host-status').style.color = "blue";
+        }
+    }
+
+    function syncState() { 
+        if (currentRole === 'HOST') {
+            connections.forEach(conn => { if (conn.open) conn.send(state); });
+        }
+    }
+
+    function initHost() {
+        currentRole = 'HOST'; document.body.classList.add('role-host');
+        document.getElementById('lobby-screen').classList.add('hidden');
+        document.getElementById('main-screen').classList.remove('hidden');
+        
+        loadLocal(); updateSettingsUI(); renderNames(); 
+        document.getElementById('board-rotation').value = boardRotation;
+        changeBoardRotation(); renderTimerLayout(); renderTimer(); renderKifuPaper();
+        
+        if(state.moves && state.moves.length > 0) selectMoveForComment(state.moves.length - 1);
+        else selectMoveForComment(-1);
+
+        const roomId = Math.floor(1000 + Math.random() * 9000).toString(); 
+        peer = new Peer('shogi-timer-' + roomId);
+        peer.on('open', (id) => document.getElementById('my-peer-id').textContent = roomId);
+        peer.on('connection', (conn) => {
+            connections.push(conn); updateConnectionStatus();
+            conn.on('open', () => conn.send(state));
+            conn.on('data', (data) => {
+                if (data.type === 'comment') {
+                    if (data.index >= 0 && data.index < state.moves.length) {
+                        state.moves[data.index].comment = data.text;
+                        if (data.index === selectedMoveIndex) {
+                            document.getElementById('comment-input').value = data.text;
+                        }
+                        renderKifuPaper(); syncState(); saveLocal();
+                        if (document.getElementById('webhook-auto-send').checked) triggerWebhookSend();
+                    }
+                }
+            });
+            conn.on('close', () => { connections = connections.filter(c => c !== conn); updateConnectionStatus(); });
+        });
+    }
+
+    function initCommentator() {
+        const roomId = document.getElementById('join-id-comm').value.trim();
+        if(!roomId) return;
+        currentRole = 'COMMENTATOR'; document.body.classList.add('role-commentator');
+        document.getElementById('lobby-screen').classList.add('hidden');
+        document.getElementById('main-screen').classList.remove('hidden');
+        
+        document.getElementById('screen-title').innerHTML = `解説者画面 <span style="font-size: 1rem; color: #555;">(接続先ID: <span style="font-weight: bold; color: red;">${roomId}</span>)</span>`;
+        document.getElementById('host-status').textContent = "記録係に接続中...";
+        
+        loadLocal();
+
+        peer = new Peer();
+        peer.on('open', () => {
+            connection = peer.connect('shogi-timer-' + roomId);
+            connection.on('open', () => {
+                document.getElementById('host-status').textContent = "記録係と同期中";
+                document.getElementById('host-status').style.color = "blue";
+            });
+            connection.on('data', (data) => { 
+                if(!data.type) { 
+                    state = data; 
+                    renderTimerLayout(); renderTimer(); renderNames(); 
+                    document.getElementById('board-rotation').value = boardRotation;
+                    changeBoardRotation(); renderKifuPaper(); 
+                    
+                    if(selectedMoveIndex === -1 && state.moves.length > 0) {
+                        selectMoveForComment(state.moves.length - 1);
+                    } else if(selectedMoveIndex >= state.moves.length) {
+                        selectMoveForComment(state.moves.length - 1);
+                    } else {
+                        selectMoveForComment(selectedMoveIndex);
+                    }
+                }
+            });
+        });
+    }
+
+    function initGuest() {
+        const roomId = document.getElementById('join-id').value.trim();
+        if(!roomId) return;
+        currentRole = 'GUEST'; document.body.classList.add('role-guest');
+        document.getElementById('lobby-screen').classList.add('hidden');
+        document.getElementById('guest-screen').classList.remove('hidden');
+        
+        let savedGuestLayout = localStorage.getItem('shogi-guest-reversed');
+        if (savedGuestLayout !== null) guestTimerReversed = (savedGuestLayout === 'true');
+        renderGuestTimerLayout();
+        
+        peer = new Peer();
+        peer.on('open', () => {
+            connection = peer.connect('shogi-timer-' + roomId);
+            connection.on('open', () => document.getElementById('guest-status-text').textContent = "接続完了");
+            connection.on('data', (data) => { 
+                if(!data.type) { state = data; renderTimerLayout(); renderTimer(); renderNames(); }
+            });
+        });
+    }
+</script>
+</body>
+</html>
